@@ -45,3 +45,4 @@ npm run db:init
 - Added initial `README.md`
 - Clarified README positioning for PRISMA screening workflow
 - Added project-based import workflow
+- Added project rename support from the current project switcher

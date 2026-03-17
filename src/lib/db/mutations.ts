@@ -5,7 +5,7 @@ import { parseBibtex } from "@/lib/bibtex/parse";
 import { normalizeBibtexEntry, type NormalizedPaperInput } from "@/lib/bibtex/normalize";
 import { nowIso } from "@/lib/utils/time";
 import { getDataDirectories, getDb, getDefaultUserId, getSqlite } from "./client";
-import { decisionLogs, importBatches, importDuplicateLogs, paperImports, papers, projects, type PaperStatus } from "./schema";
+import { decisionLogs, importBatches, importDuplicateLogs, papers, projects, type PaperStatus } from "./schema";
 import { findDuplicatePaper, getLatestActiveDecision, getNextPendingPaperId, getPaperById, getProjectById, getStats, normalizeTitle } from "./queries";
 import { previewCache } from "./preview-cache";
 import { logDecision, logImport, logUndo } from "@/lib/activity-log";
@@ -79,6 +79,41 @@ export async function createProject({
     createdAt,
     updatedAt: createdAt
   } satisfies ProjectSummary;
+}
+
+export async function renameProject({
+  projectId,
+  name
+}: {
+  projectId: string;
+  name: string;
+}) {
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error("Project name is required");
+  }
+
+  const existingProject = await getProjectById(projectId);
+  if (!existingProject) {
+    throw new Error("Project not found");
+  }
+
+  const db = getDb();
+  const updatedAt = nowIso();
+
+  db.update(projects)
+    .set({
+      name: trimmedName,
+      updatedAt
+    })
+    .where(eq(projects.id, projectId))
+    .run();
+
+  return {
+    ...existingProject,
+    name: trimmedName,
+    updatedAt
+  };
 }
 
 export async function previewImport({
@@ -238,6 +273,7 @@ export async function commitImport({
       db.insert(papers).values({
         id: paperId,
         projectId,
+        importBatchId: batchId,
         bibtexKey: entry.bibtexKey,
         rawBibtex: entry.rawBibtex,
         title: entry.title,
@@ -253,7 +289,6 @@ export async function commitImport({
         createdAt,
         updatedAt: createdAt
       }).run();
-      db.insert(paperImports).values({ id: crypto.randomUUID(), batchId, paperId }).run();
     }
 
     // Log skipped duplicates

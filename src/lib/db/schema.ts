@@ -29,6 +29,7 @@ export const papers = sqliteTable(
   {
     id: text("id").primaryKey(),
     projectId: text("project_id").notNull(),
+    importBatchId: text("import_batch_id"),
     bibtexKey: text("bibtex_key"),
     rawBibtex: text("raw_bibtex").notNull(),
     title: text("title").notNull(),
@@ -46,6 +47,7 @@ export const papers = sqliteTable(
   },
   (table) => ({
     projectIdx: index("papers_project_idx").on(table.projectId),
+    importBatchIdx: index("papers_import_batch_idx").on(table.importBatchId),
     statusIdx: index("papers_status_idx").on(table.status),
     yearIdx: index("papers_year_idx").on(table.year)
   })
@@ -76,12 +78,6 @@ export const importDuplicateLogs = sqliteTable("import_duplicate_logs", {
   action: text("action").notNull(),
   forcePaperId: text("force_paper_id"),
   createdAt: text("created_at").notNull()
-});
-
-export const paperImports = sqliteTable("paper_imports", {
-  id: text("id").primaryKey(),
-  batchId: text("batch_id").notNull(),
-  paperId: text("paper_id").notNull()
 });
 
 export const decisionLogs = sqliteTable(

@@ -2,13 +2,14 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const IMPORT_DIR = path.join(DATA_DIR, "imports");
 const EXPORT_DIR = path.join(DATA_DIR, "exports");
 const DB_PATH = path.join(DATA_DIR, "review.db");
-const DEFAULT_USER_ID = "local-reviewer";
-const LEGACY_PROJECT_ID = "legacy-project";
+const DEFAULT_USER_ID = "b38e6f5d-4c9f-49f2-a7ec-7f6ecb6cb4eb";
+const LEGACY_USER_ID = "local-reviewer";
 const LEGACY_PROJECT_NAME = "Legacy";
 
 let database: InstanceType<typeof Database> | null = null;
@@ -48,7 +49,8 @@ export function initializeDatabase() {
 
       CREATE TABLE IF NOT EXISTS papers (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
+        import_batch_id TEXT,
         bibtex_key TEXT,
         raw_bibtex TEXT NOT NULL,
         title TEXT NOT NULL,
@@ -67,7 +69,7 @@ export function initializeDatabase() {
 
       CREATE TABLE IF NOT EXISTS import_batches (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
         source_type TEXT NOT NULL,
         filename TEXT,
@@ -92,12 +94,6 @@ export function initializeDatabase() {
         created_at TEXT NOT NULL
       );
 
-      CREATE TABLE IF NOT EXISTS paper_imports (
-        id TEXT PRIMARY KEY,
-        batch_id TEXT NOT NULL,
-        paper_id TEXT NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS decision_logs (
         id TEXT PRIMARY KEY,
         paper_id TEXT NOT NULL,
@@ -112,21 +108,59 @@ export function initializeDatabase() {
       );
 
       CREATE INDEX IF NOT EXISTS papers_status_idx ON papers(status);
+      CREATE INDEX IF NOT EXISTS papers_project_idx ON papers(project_id);
       CREATE INDEX IF NOT EXISTS papers_year_idx ON papers(year);
       CREATE INDEX IF NOT EXISTS projects_user_created_idx ON projects(user_id, created_at);
       CREATE INDEX IF NOT EXISTS decision_logs_paper_created_idx ON decision_logs(paper_id, created_at);
       CREATE INDEX IF NOT EXISTS decision_logs_user_created_idx ON decision_logs(user_id, created_at);
     `);
 
-    // Migrations for existing databases
-    try { database.exec("ALTER TABLE import_batches ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0"); } catch {}
-    try { database.exec("ALTER TABLE import_batches ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0"); } catch {}
-    try { database.exec("ALTER TABLE papers ADD COLUMN project_id TEXT NOT NULL DEFAULT ''"); } catch {}
-    try { database.exec("ALTER TABLE import_batches ADD COLUMN project_id TEXT NOT NULL DEFAULT ''"); } catch {}
-    try { database.exec("CREATE INDEX IF NOT EXISTS papers_project_idx ON papers(project_id)"); } catch {}
-    try { database.exec("CREATE INDEX IF NOT EXISTS projects_user_created_idx ON projects(user_id, created_at)"); } catch {}
-
     const now = new Date().toISOString();
+    const legacyUser = database
+      .prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`)
+      .get(LEGACY_USER_ID) as
+        | {
+            id: string;
+            display_name: string;
+            email: string | null;
+            role: string;
+            created_at: string;
+            updated_at: string;
+          }
+        | undefined;
+
+    const currentUser = database
+      .prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`)
+      .get(DEFAULT_USER_ID) as { id: string } | undefined;
+
+    if (legacyUser && !currentUser) {
+      database
+        .prepare(
+          `INSERT INTO users (id, display_name, email, role, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          DEFAULT_USER_ID,
+          legacyUser.display_name,
+          legacyUser.email,
+          legacyUser.role,
+          legacyUser.created_at,
+          now
+        );
+      database
+        .prepare(`UPDATE projects SET user_id = ? WHERE user_id = ?`)
+        .run(DEFAULT_USER_ID, LEGACY_USER_ID);
+      database
+        .prepare(`UPDATE import_batches SET user_id = ? WHERE user_id = ?`)
+        .run(DEFAULT_USER_ID, LEGACY_USER_ID);
+      database
+        .prepare(`UPDATE decision_logs SET user_id = ? WHERE user_id = ?`)
+        .run(DEFAULT_USER_ID, LEGACY_USER_ID);
+      database
+        .prepare(`DELETE FROM users WHERE id = ?`)
+        .run(LEGACY_USER_ID);
+    }
+
     database
       .prepare(
         `INSERT OR IGNORE INTO users (id, display_name, email, role, created_at, updated_at)
@@ -134,19 +168,49 @@ export function initializeDatabase() {
       )
       .run(DEFAULT_USER_ID, "Local Reviewer", null, "reviewer", now, now);
 
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO projects (id, user_id, name, description, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(LEGACY_PROJECT_ID, DEFAULT_USER_ID, LEGACY_PROJECT_NAME, "Migrated pre-project data", now, now);
+    const paperColumns = database.prepare(`PRAGMA table_info(papers)`).all() as Array<{ name: string }>;
+    const hasImportBatchId = paperColumns.some((column) => column.name === "import_batch_id");
+    if (!hasImportBatchId) {
+      database.exec(`ALTER TABLE papers ADD COLUMN import_batch_id TEXT`);
+      database.exec(`CREATE INDEX IF NOT EXISTS papers_import_batch_idx ON papers(import_batch_id)`);
+    }
 
-    database
-      .prepare(`UPDATE papers SET project_id = ? WHERE project_id IS NULL OR project_id = ''`)
-      .run(LEGACY_PROJECT_ID);
-    database
-      .prepare(`UPDATE import_batches SET project_id = ? WHERE project_id IS NULL OR project_id = ''`)
-      .run(LEGACY_PROJECT_ID);
+    const [paperImportsTable] = database
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'paper_imports'`)
+      .all() as Array<{ name: string }>;
+
+    if (paperImportsTable) {
+      database.exec(`
+        UPDATE papers
+        SET import_batch_id = (
+          SELECT pi.batch_id
+          FROM paper_imports pi
+          WHERE pi.paper_id = papers.id
+          LIMIT 1
+        )
+        WHERE import_batch_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM paper_imports pi
+            WHERE pi.paper_id = papers.id
+          )
+      `);
+      database.exec(`DROP TABLE paper_imports`);
+    }
+
+    const [anyProject] = database
+      .prepare(`SELECT id FROM projects LIMIT 1`)
+      .all() as Array<{ id: string }>;
+
+    if (!anyProject) {
+      const legacyProjectId = randomUUID();
+      database
+        .prepare(
+          `INSERT INTO projects (id, user_id, name, description, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .run(legacyProjectId, DEFAULT_USER_ID, LEGACY_PROJECT_NAME, "Default project", now, now);
+    }
   }
 
   return database;
@@ -163,10 +227,6 @@ export function getSqlite() {
 
 export function getDefaultUserId() {
   return DEFAULT_USER_ID;
-}
-
-export function getLegacyProject() {
-  return { id: LEGACY_PROJECT_ID, name: LEGACY_PROJECT_NAME };
 }
 
 export function getDataDirectories() {

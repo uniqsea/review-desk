@@ -12,8 +12,12 @@ import { useProjects } from "@/hooks/use-projects";
 import { useStats } from "@/hooks/use-stats";
 
 async function postJson(url: string, body?: unknown) {
+  return sendJson("POST", url, body);
+}
+
+async function sendJson(method: "POST" | "PATCH", url: string, body?: unknown) {
   const response = await fetch(url, {
-    method: "POST",
+    method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined
   });
@@ -32,6 +36,71 @@ async function postJson(url: string, body?: unknown) {
 
 type ActiveSide = "pending" | "processed";
 
+function RenameProjectDialog({
+  open,
+  initialName,
+  onClose,
+  onSubmit,
+  isSubmitting
+}: {
+  open: boolean;
+  initialName: string;
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+  isSubmitting: boolean;
+}) {
+  const [name, setName] = useState(initialName);
+
+  useEffect(() => {
+    if (open) {
+      setName(initialName);
+    }
+  }, [open, initialName]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
+      <div className="panel w-full max-w-md p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Rename Project</h2>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">Update the current project name.</p>
+          </div>
+          <button type="button" onClick={onClose} className="pill px-3 py-1.5 text-sm">
+            Close
+          </button>
+        </div>
+
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Project name"
+          className="mt-5 w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none"
+          style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+        />
+
+        <div className="mt-5 flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="pill px-4 py-2 text-sm font-medium">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSubmit(name)}
+            disabled={!name.trim() || isSubmitting}
+            className="rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            style={{ background: "var(--accent)" }}
+          >
+            {isSubmitting ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WorkbenchPage() {
   const queryClient = useQueryClient();
 
@@ -40,6 +109,7 @@ export function WorkbenchPage() {
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [showRenameProject, setShowRenameProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const projectsQuery = useProjects();
@@ -60,6 +130,7 @@ export function WorkbenchPage() {
   const statsQuery = useStats(currentProjectId);
   const stats = statsQuery.data?.stats;
   const detailQuery = usePaperDetail(selectedPaperId, currentProjectId);
+  const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
 
   useEffect(() => {
     if (projects.length === 0) return;
@@ -133,6 +204,17 @@ export function WorkbenchPage() {
     onError: (e) => setError(e instanceof Error ? e.message : "Failed to undo")
   });
 
+  const renameProjectMutation = useMutation({
+    mutationFn: async (name: string) =>
+      sendJson("PATCH", `/api/projects/${currentProjectId}`, { name }),
+    onSuccess: async () => {
+      setError(null);
+      setShowRenameProject(false);
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : "Failed to rename project")
+  });
+
   const working = decisionMutation.isPending || undoMutation.isPending;
 
   const selectPending = (id: string) => { setActiveSide("pending"); setSelectedPaperId(id); setReason(""); };
@@ -153,18 +235,28 @@ export function WorkbenchPage() {
               <div className="hidden xl:block h-7 w-px bg-[var(--border)]" />
               <div className="min-w-[220px]">
                 <div className="mb-1 text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">Current Project</div>
-                <select
-                  value={currentProjectId ?? ""}
-                  onChange={(event) => setCurrentProjectId(event.target.value || null)}
-                  className="w-full rounded-xl border bg-transparent px-3 py-2 text-sm outline-none"
-                  style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
-                >
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  <select
+                    value={currentProjectId ?? ""}
+                    onChange={(event) => setCurrentProjectId(event.target.value || null)}
+                    className="w-full rounded-xl border bg-transparent px-3 py-2 text-sm outline-none"
+                    style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+                  >
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setShowRenameProject(true)}
+                    disabled={!currentProjectId}
+                    className="pill px-3 py-2 text-sm font-medium disabled:opacity-60"
+                  >
+                    Rename
+                  </button>
+                </div>
               </div>
               {stats && (
                 <>
@@ -265,6 +357,14 @@ export function WorkbenchPage() {
           setSelectedPaperId(null);
           setActiveSide("pending");
         }}
+      />
+
+      <RenameProjectDialog
+        open={showRenameProject}
+        initialName={currentProject?.name ?? ""}
+        onClose={() => setShowRenameProject(false)}
+        onSubmit={(name) => renameProjectMutation.mutate(name)}
+        isSubmitting={renameProjectMutation.isPending}
       />
     </main>
   );

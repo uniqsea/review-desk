@@ -7,6 +7,7 @@ export interface ProjectSummary {
   name: string;
   description: string | null;
   createdAt: string;
+  updatedAt?: string;
   paperCount: number;
   pendingCount: number;
   includedCount: number;
