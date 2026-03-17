@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth";
+import { requireProjectMembership } from "@/lib/access";
 import { previewImport } from "@/lib/db/mutations";
 
 export async function POST(request: Request) {
   try {
+    const user = await requireUser();
     const contentType = request.headers.get("content-type") ?? "";
     let rawInput: string;
     let sourceType: "file" | "text";
@@ -33,6 +36,10 @@ export async function POST(request: Request) {
       mode = body.mode === "new_project" ? "new_project" : "existing_project";
       projectId = typeof body.projectId === "string" ? body.projectId : null;
       projectName = typeof body.projectName === "string" ? body.projectName : null;
+    }
+
+    if (mode === "existing_project" && projectId) {
+      await requireProjectMembership(projectId, user.userId);
     }
 
     const preview = await previewImport({ rawInput, sourceType, filename, mode, projectId, projectName });

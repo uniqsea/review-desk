@@ -4,9 +4,28 @@ import path from "node:path";
 import { parseBibtex } from "@/lib/bibtex/parse";
 import { normalizeBibtexEntry, type NormalizedPaperInput } from "@/lib/bibtex/normalize";
 import { nowIso } from "@/lib/utils/time";
-import { getDataDirectories, getDb, getDefaultUserId, getSqlite } from "./client";
-import { decisionLogs, importBatches, importDuplicateLogs, papers, projects, type PaperStatus } from "./schema";
-import { findDuplicatePaper, getLatestActiveDecision, getNextPendingPaperId, getPaperById, getProjectById, getStats, normalizeTitle } from "./queries";
+import { getDataDirectories, getDb, getSqlite } from "./client";
+import {
+  decisionLogs,
+  importBatches,
+  importDuplicateLogs,
+  paperReviews,
+  papers,
+  projectMembers,
+  projects,
+  users,
+  type PaperStatus
+} from "./schema";
+import {
+  findDuplicatePaper,
+  getLatestActiveDecision,
+  getNextPendingPaperId,
+  getPaperById,
+  getProjectById,
+  getProjectMembers,
+  getReviewerStats,
+  normalizeTitle
+} from "./queries";
 import { previewCache } from "./preview-cache";
 import { logDecision, logImport, logUndo } from "@/lib/activity-log";
 
@@ -38,18 +57,12 @@ export interface ImportPreview {
   rawCount: number;
 }
 
-export interface ProjectSummary {
-  id: string;
-  name: string;
-  description: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export async function createProject({
+  userId,
   name,
   description
 }: {
+  userId: string;
   name: string;
   description?: string | null;
 }) {
@@ -59,7 +72,6 @@ export async function createProject({
   }
 
   const db = getDb();
-  const userId = getDefaultUserId();
   const createdAt = nowIso();
   const projectId = crypto.randomUUID();
 
@@ -72,13 +84,21 @@ export async function createProject({
     updatedAt: createdAt
   }).run();
 
+  db.insert(projectMembers).values({
+    id: crypto.randomUUID(),
+    projectId,
+    userId,
+    role: "owner",
+    createdAt
+  }).run();
+
   return {
     id: projectId,
     name: trimmedName,
     description: description?.trim() || null,
     createdAt,
     updatedAt: createdAt
-  } satisfies ProjectSummary;
+  };
 }
 
 export async function renameProject({
@@ -101,19 +121,46 @@ export async function renameProject({
   const db = getDb();
   const updatedAt = nowIso();
 
-  db.update(projects)
-    .set({
-      name: trimmedName,
-      updatedAt
-    })
-    .where(eq(projects.id, projectId))
-    .run();
+  db.update(projects).set({ name: trimmedName, updatedAt }).where(eq(projects.id, projectId)).run();
+  return { ...existingProject, name: trimmedName, updatedAt };
+}
 
-  return {
-    ...existingProject,
-    name: trimmedName,
-    updatedAt
-  };
+export async function addProjectMemberByUserId(projectId: string, userId: string) {
+  const db = getDb();
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  const existingMembers = await getProjectMembers(projectId);
+  if (existingMembers.some((member) => member.userId === user.id)) {
+    throw new Error("User is already a project member");
+  }
+
+  const createdAt = nowIso();
+  db.insert(projectMembers).values({
+    id: crypto.randomUUID(),
+    projectId,
+    userId: user.id,
+    role: "reviewer",
+    createdAt
+  }).run();
+
+  return user;
+}
+
+export async function removeProjectMember(projectId: string, userId: string) {
+  const members = await getProjectMembers(projectId);
+  const target = members.find((member) => member.userId === userId);
+  if (!target) {
+    throw new Error("Member not found");
+  }
+  if (target.role === "owner") {
+    throw new Error("Owner cannot be removed");
+  }
+
+  const db = getDb();
+  db.delete(projectMembers).where(eq(projectMembers.id, target.id)).run();
 }
 
 export async function previewImport({
@@ -194,7 +241,6 @@ export async function previewImport({
     expiresAt: Date.now() + 10 * 60 * 1000
   });
 
-  // Cleanup expired tokens
   for (const [token, cached] of previewCache.entries()) {
     if (cached.expiresAt < Date.now()) previewCache.delete(token);
   }
@@ -203,9 +249,11 @@ export async function previewImport({
 }
 
 export async function commitImport({
+  userId,
   batchToken,
   forceEntryIndices
 }: {
+  userId: string;
   batchToken: string;
   forceEntryIndices: number[];
 }) {
@@ -218,20 +266,16 @@ export async function commitImport({
   const { preview, validEntries } = cached;
   const db = getDb();
   const sqlite = getSqlite();
-  const userId = getDefaultUserId();
   const batchId = crypto.randomUUID();
   const createdAt = nowIso();
   let projectId = preview.projectId ?? null;
 
   const forceSet = new Set(forceEntryIndices);
   const duplicateIndexSet = new Set(preview.duplicates.map((d) => d.entryIndex));
-
-  // Entries to actually insert: non-duplicates + forced duplicates
   const entriesToInsert = validEntries.filter((_, i) => !duplicateIndexSet.has(i) || forceSet.has(i));
   const skippedDuplicates = preview.duplicates.filter((d) => !forceSet.has(d.entryIndex));
   const forcedDuplicates = preview.duplicates.filter((d) => forceSet.has(d.entryIndex));
-
-  const insertedPaperIds = new Map<number, string>(); // entryIndex -> paperId
+  const insertedPaperIds = new Map<number, string>();
 
   sqlite.transaction(() => {
     if (preview.mode === "new_project") {
@@ -243,6 +287,13 @@ export async function commitImport({
         description: null,
         createdAt,
         updatedAt: createdAt
+      }).run();
+      db.insert(projectMembers).values({
+        id: crypto.randomUUID(),
+        projectId,
+        userId,
+        role: "owner",
+        createdAt
       }).run();
     }
 
@@ -265,7 +316,7 @@ export async function commitImport({
       createdAt
     }).run();
 
-    for (let i = 0; i < validEntries.length; i++) {
+    for (let i = 0; i < validEntries.length; i += 1) {
       if (duplicateIndexSet.has(i) && !forceSet.has(i)) continue;
       const entry = validEntries[i];
       const paperId = crypto.randomUUID();
@@ -291,7 +342,6 @@ export async function commitImport({
       }).run();
     }
 
-    // Log skipped duplicates
     for (const dup of skippedDuplicates) {
       db.insert(importDuplicateLogs).values({
         id: crypto.randomUUID(),
@@ -306,9 +356,7 @@ export async function commitImport({
       }).run();
     }
 
-    // Log forced duplicates
     for (const dup of forcedDuplicates) {
-      const forcePaperId = insertedPaperIds.get(dup.entryIndex) ?? null;
       db.insert(importDuplicateLogs).values({
         id: crypto.randomUUID(),
         batchId,
@@ -317,7 +365,7 @@ export async function commitImport({
         newDoi: dup.entry.doi || null,
         matchReason: dup.matchReason,
         action: "force_imported",
-        forcePaperId,
+        forcePaperId: insertedPaperIds.get(dup.entryIndex) ?? null,
         createdAt
       }).run();
     }
@@ -328,24 +376,26 @@ export async function commitImport({
     fs.writeFileSync(path.join(IMPORT_DIR, `${batchId}-${preview.filename}`), preview.rawInput, "utf8");
   }
 
-  const importedCount = entriesToInsert.length;
-  const skippedCount = skippedDuplicates.length;
-  const failedCount = preview.failures.length;
-  const dupCount = preview.duplicates.length;
-  const label = preview.sourceType === "file" && preview.filename ? preview.filename : "pasted text";
-  logImport({ label, imported: importedCount, skipped: skippedCount, failed: failedCount, duplicates: dupCount });
+  logImport({
+    label: preview.sourceType === "file" && preview.filename ? preview.filename : "pasted text",
+    imported: entriesToInsert.length,
+    skipped: skippedDuplicates.length,
+    failed: preview.failures.length,
+    duplicates: preview.duplicates.length
+  });
 
   return {
     projectId,
     batchId,
-    imported: importedCount,
-    skipped: skippedCount,
+    imported: entriesToInsert.length,
+    skipped: skippedDuplicates.length,
     forceImported: forcedDuplicates.length,
-    failed: failedCount
+    failed: preview.failures.length
   };
 }
 
 export async function importBibtexInput({
+  userId,
   rawInput,
   sourceType,
   filename,
@@ -353,6 +403,7 @@ export async function importBibtexInput({
   projectId,
   projectName
 }: {
+  userId: string;
   rawInput: string;
   sourceType: "file" | "text";
   filename?: string | null;
@@ -360,89 +411,114 @@ export async function importBibtexInput({
   projectId?: string | null;
   projectName?: string | null;
 }) {
-  const preview = await previewImport({
-    rawInput,
-    sourceType,
-    filename,
-    mode,
-    projectId,
-    projectName
-  });
-
-  return commitImport({
-    batchToken: preview.batchToken,
-    forceEntryIndices: []
-  });
+  const preview = await previewImport({ rawInput, sourceType, filename, mode, projectId, projectName });
+  return commitImport({ userId, batchToken: preview.batchToken, forceEntryIndices: [] });
 }
 
 export async function createDecision({
   paperId,
+  reviewerId,
   decision,
   reason,
   projectId
 }: {
   paperId: string;
+  reviewerId: string;
   decision: Extract<PaperStatus, "included" | "excluded" | "uncertain">;
   reason?: string;
-  projectId?: string;
+  projectId: string;
 }) {
   const db = getDb();
   const sqlite = getSqlite();
-  const userId = getDefaultUserId();
   const createdAt = nowIso();
-  const paper = await getPaperById(paperId, projectId);
+  const paper = await getPaperById(paperId, projectId, reviewerId);
 
   if (!paper) {
     throw new Error("Paper not found");
   }
 
+  const [existingReview] = await db
+    .select()
+    .from(paperReviews)
+    .where(and(eq(paperReviews.paperId, paperId), eq(paperReviews.reviewerId, reviewerId)))
+    .limit(1);
+
+  const fromStatus = (existingReview?.decision ?? "pending") as PaperStatus;
   const decisionId = crypto.randomUUID();
 
   sqlite.transaction(() => {
+    if (existingReview) {
+      db.update(paperReviews)
+        .set({
+          decision,
+          reason: reason?.trim() || null,
+          updatedAt: createdAt
+        })
+        .where(eq(paperReviews.id, existingReview.id))
+        .run();
+    } else {
+      db.insert(paperReviews).values({
+        id: crypto.randomUUID(),
+        paperId,
+        projectId,
+        reviewerId,
+        decision,
+        reason: reason?.trim() || null,
+        createdAt,
+        updatedAt: createdAt
+      }).run();
+    }
+
     db.insert(decisionLogs).values({
       id: decisionId,
       paperId,
-      userId,
+      userId: reviewerId,
       kind: "decision",
-      fromStatus: paper.status as PaperStatus,
+      fromStatus,
       toStatus: decision,
       reason: reason?.trim() || null,
       targetDecisionId: null,
       isActive: true,
       createdAt
     }).run();
-
-    db.update(papers)
-      .set({
-        status: decision,
-        latestDecisionId: decisionId,
-        updatedAt: createdAt
-      })
-      .where(eq(papers.id, paperId))
-      .run();
   })();
 
-  logDecision({ title: paper.title, fromStatus: paper.status, toStatus: decision, reason: reason?.trim() });
+  logDecision({ title: paper.title, fromStatus, toStatus: decision, reason: reason?.trim() });
 
   return {
-    paper: await getPaperById(paperId),
-    nextPendingPaperId: await getNextPendingPaperId(paper.projectId, paperId),
-    stats: await getStats(paper.projectId)
+    paper: await getPaperById(paperId, projectId, reviewerId),
+    nextPendingPaperId: await getNextPendingPaperId(projectId, reviewerId, paperId),
+    stats: await getReviewerStats(projectId, reviewerId)
   };
 }
 
-export async function undoLatestDecisionForPaper(paperId: string, projectId?: string) {
-  const decision = await getLatestActiveDecision(paperId, projectId);
+export async function undoLatestDecisionForPaper({
+  paperId,
+  reviewerId,
+  projectId
+}: {
+  paperId: string;
+  reviewerId: string;
+  projectId: string;
+}) {
+  const decision = await getLatestActiveDecision(paperId, reviewerId);
   if (!decision) {
     throw new Error("No active decision to undo");
   }
-  return undoDecisionById(decision.id);
+  return undoDecisionById({ decisionId: decision.id, reviewerId, projectId });
 }
 
-export async function undoDecisionById(decisionId: string) {
+export async function undoDecisionById({
+  decisionId,
+  reviewerId,
+  projectId
+}: {
+  decisionId: string;
+  reviewerId: string;
+  projectId: string;
+}) {
   const db = getDb();
   const sqlite = getSqlite();
-  const userId = getDefaultUserId();
   const createdAt = nowIso();
   const [targetDecision] = await db
     .select()
@@ -450,34 +526,20 @@ export async function undoDecisionById(decisionId: string) {
     .where(eq(decisionLogs.id, decisionId))
     .limit(1);
 
-  if (!targetDecision) {
+  if (!targetDecision || targetDecision.userId !== reviewerId) {
     throw new Error("Decision log not found");
   }
-
   if (targetDecision.kind !== "decision" || !targetDecision.isActive) {
     throw new Error("Decision log cannot be undone");
   }
 
-  const [coveredUndo] = await db
-    .select()
-    .from(decisionLogs)
-    .where(and(eq(decisionLogs.kind, "undo"), eq(decisionLogs.targetDecisionId, decisionId)))
-    .limit(1);
-
-  if (coveredUndo) {
-    throw new Error("Decision already undone");
-  }
-
   sqlite.transaction(() => {
-    db.update(decisionLogs)
-      .set({ isActive: false })
-      .where(eq(decisionLogs.id, decisionId))
-      .run();
+    db.update(decisionLogs).set({ isActive: false }).where(eq(decisionLogs.id, decisionId)).run();
 
     db.insert(decisionLogs).values({
       id: crypto.randomUUID(),
       paperId: targetDecision.paperId,
-      userId,
+      userId: reviewerId,
       kind: "undo",
       fromStatus: targetDecision.toStatus,
       toStatus: targetDecision.fromStatus,
@@ -489,29 +551,36 @@ export async function undoDecisionById(decisionId: string) {
 
     const latestRemaining = sqlite
       .prepare(
-        `SELECT id, to_status FROM decision_logs
-         WHERE paper_id = ? AND kind = 'decision' AND is_active = 1
+        `SELECT id, to_status, reason, created_at
+         FROM decision_logs
+         WHERE paper_id = ? AND user_id = ? AND kind = 'decision' AND is_active = 1
          ORDER BY created_at DESC LIMIT 1`
       )
-      .get(targetDecision.paperId) as { id: string; to_status: PaperStatus } | undefined;
+      .get(targetDecision.paperId, reviewerId) as
+      | { id: string; to_status: PaperStatus; reason: string | null; created_at: string }
+      | undefined;
 
-    db.update(papers)
-      .set({
-        status: latestRemaining?.to_status ?? "pending",
-        latestDecisionId: latestRemaining?.id ?? null,
-        updatedAt: createdAt
-      })
-      .where(eq(papers.id, targetDecision.paperId))
-      .run();
+    if (latestRemaining) {
+      db.update(paperReviews)
+        .set({
+          decision: latestRemaining.to_status,
+          reason: latestRemaining.reason,
+          updatedAt: createdAt
+        })
+        .where(and(eq(paperReviews.paperId, targetDecision.paperId), eq(paperReviews.reviewerId, reviewerId)))
+        .run();
+    } else {
+      db.delete(paperReviews)
+        .where(and(eq(paperReviews.paperId, targetDecision.paperId), eq(paperReviews.reviewerId, reviewerId)))
+        .run();
+    }
   })();
 
-  const undonePaper = await getPaperById(targetDecision.paperId);
-  if (undonePaper) {
-    logUndo({ title: undonePaper.title, fromStatus: targetDecision.toStatus, toStatus: targetDecision.fromStatus });
-  }
+  const undonePaper = await getPaperById(targetDecision.paperId, projectId, reviewerId);
+  logUndo({ title: undonePaper?.title ?? "Paper", fromStatus: targetDecision.toStatus, toStatus: targetDecision.fromStatus });
 
   return {
     paper: undonePaper,
-    stats: undonePaper ? await getStats(undonePaper.projectId) : null
+    stats: await getReviewerStats(projectId, reviewerId)
   };
 }

@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth";
+import { requireProjectOwner } from "@/lib/access";
 import { renameProject } from "@/lib/db/mutations";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const user = await requireUser();
     const { id } = await params;
+    await requireProjectOwner(id, user.userId);
     const body = await request.json();
 
     if (!body.name || typeof body.name !== "string" || !body.name.trim()) {

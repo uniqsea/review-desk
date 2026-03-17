@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
-import { listPapers } from "@/lib/db/queries";
+import { requireUser } from "@/lib/auth";
+import { requireProjectMembership } from "@/lib/access";
+import { listReviewerPapers } from "@/lib/db/queries";
 import { paperQuerySchema } from "@/lib/validators/paper";
 
 export async function GET(request: Request) {
+  const user = await requireUser();
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get("projectId") ?? "";
   const parsed = paperQuerySchema.safeParse({
@@ -18,6 +21,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "projectId is required" }, { status: 400 });
   }
 
-  const papers = await listPapers(parsed.data.status, parsed.data.q, projectId);
+  await requireProjectMembership(projectId, user.userId);
+  const papers = await listReviewerPapers(parsed.data.status, parsed.data.q, projectId, user.userId);
   return NextResponse.json({ papers });
 }

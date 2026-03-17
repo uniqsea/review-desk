@@ -4,10 +4,24 @@ export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   displayName: text("display_name").notNull(),
   email: text("email"),
+  passwordHash: text("password_hash"),
   role: text("role").notNull().default("reviewer"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull()
 });
+
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => ({
+    userExpiresIdx: index("sessions_user_expires_idx").on(table.userId, table.expiresAt)
+  })
+);
 
 export const projects = sqliteTable(
   "projects",
@@ -80,6 +94,40 @@ export const importDuplicateLogs = sqliteTable("import_duplicate_logs", {
   createdAt: text("created_at").notNull()
 });
 
+export const projectMembers = sqliteTable(
+  "project_members",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    userId: text("user_id").notNull(),
+    role: text("role").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => ({
+    projectUserIdx: index("project_members_project_user_idx").on(table.projectId, table.userId),
+    userProjectIdx: index("project_members_user_project_idx").on(table.userId, table.projectId)
+  })
+);
+
+export const paperReviews = sqliteTable(
+  "paper_reviews",
+  {
+    id: text("id").primaryKey(),
+    paperId: text("paper_id").notNull(),
+    projectId: text("project_id").notNull(),
+    reviewerId: text("reviewer_id").notNull(),
+    decision: text("decision").notNull(),
+    reason: text("reason"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (table) => ({
+    paperReviewerIdx: index("paper_reviews_paper_reviewer_idx").on(table.paperId, table.reviewerId),
+    projectReviewerIdx: index("paper_reviews_project_reviewer_idx").on(table.projectId, table.reviewerId),
+    reviewerUpdatedIdx: index("paper_reviews_reviewer_updated_idx").on(table.reviewerId, table.updatedAt)
+  })
+);
+
 export const decisionLogs = sqliteTable(
   "decision_logs",
   {
@@ -102,3 +150,4 @@ export const decisionLogs = sqliteTable(
 
 export type PaperStatus = "pending" | "included" | "excluded" | "uncertain";
 export type DecisionKind = "decision" | "undo";
+export type ProjectMemberRole = "owner" | "reviewer";

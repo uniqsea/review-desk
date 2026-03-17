@@ -9,10 +9,7 @@ export interface ProjectSummary {
   createdAt: string;
   updatedAt?: string;
   paperCount: number;
-  pendingCount: number;
-  includedCount: number;
-  excludedCount: number;
-  uncertainCount: number;
+  role: "owner" | "reviewer";
 }
 
 async function fetchProjects() {

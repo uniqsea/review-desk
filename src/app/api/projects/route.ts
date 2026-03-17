@@ -1,20 +1,24 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth";
 import { createProject } from "@/lib/db/mutations";
-import { getProjects } from "@/lib/db/queries";
+import { getProjectsForUser } from "@/lib/db/queries";
 
 export async function GET() {
-  const projects = await getProjects();
+  const user = await requireUser();
+  const projects = await getProjectsForUser(user.userId);
   return NextResponse.json({ projects });
 }
 
 export async function POST(request: Request) {
   try {
+    const user = await requireUser();
     const body = await request.json();
     if (!body.name || typeof body.name !== "string" || !body.name.trim()) {
       return NextResponse.json({ error: "Project name is required" }, { status: 400 });
     }
 
     const project = await createProject({
+      userId: user.userId,
       name: body.name,
       description: typeof body.description === "string" ? body.description : null
     });
