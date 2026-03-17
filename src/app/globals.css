@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f0f4f8;
+  --panel: #ffffff;
+  --panel-muted: #e8eef5;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --border: rgba(15, 23, 42, 0.12);
+  --accent: #2563eb;
+  --included: #16a34a;
+  --excluded: #dc2626;
+  --pending: #ca8a04;
+  --radius: 18px;
+  --hairline: 0.5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-muted: #1c2230;
+    --text: #e6edf3;
+    --text-muted: #7d8590;
+    --border: rgba(230, 237, 243, 0.1);
+    --accent: #4f8ef7;
+    --included: #3fb950;
+    --excluded: #f85149;
+    --pending: #d29922;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 30%),
+    radial-gradient(circle at top right, rgba(22, 163, 74, 0.06), transparent 22%),
+    var(--bg);
+}
+
+.panel {
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.panel-muted {
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-muted);
+}
+
+.pill {
+  border: var(--hairline) solid var(--border);
+  border-radius: 999px;
+}
+
+.hairline-top {
+  border-top: var(--hairline) solid var(--border);
+}
+
+.hairline-bottom {
+  border-bottom: var(--hairline) solid var(--border);
+}
