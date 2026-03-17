@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 export interface PaperDetailData {
   id: string;
+  projectId: string;
   title: string;
   authorsText: string | null;
   firstAuthor: string | null;
@@ -18,18 +19,18 @@ export interface PaperDetailData {
   latestDecisionTimestamp: string | null;
 }
 
-async function fetchPaper(id: string) {
-  const response = await fetch(`/api/papers/${id}`);
+async function fetchPaper(id: string, projectId: string) {
+  const response = await fetch(`/api/papers/${id}?${new URLSearchParams({ projectId }).toString()}`);
   if (!response.ok) {
     throw new Error("Failed to fetch paper");
   }
   return (await response.json()) as { paper: PaperDetailData };
 }
 
-export function usePaperDetail(id: string | null) {
+export function usePaperDetail(id: string | null, projectId: string | null) {
   return useQuery({
-    queryKey: ["paper", id],
-    queryFn: () => fetchPaper(id as string),
-    enabled: Boolean(id)
+    queryKey: ["paper", projectId, id],
+    queryFn: () => fetchPaper(id as string, projectId as string),
+    enabled: Boolean(id && projectId)
   });
 }

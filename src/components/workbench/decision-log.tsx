@@ -34,7 +34,7 @@ function BatchDuplicateRow({ dup }: { dup: ImportDuplicateLog }) {
 
 function BatchCard({ batch }: { batch: ImportBatch }) {
   const [expanded, setExpanded] = useState(false);
-  const dupQuery = useImportBatchDuplicates(expanded && batch.duplicateCount > 0 ? batch.id : null);
+  const dupQuery = useImportBatchDuplicates(batch.projectId, expanded && batch.duplicateCount > 0 ? batch.id : null);
 
   const importedCount = batch.parsedCount - batch.skippedCount;
   const label = batch.sourceType === "file" && batch.filename ? batch.filename : "pasted text";

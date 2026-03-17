@@ -13,7 +13,10 @@ export async function POST(request: Request) {
 
     const result = await importBibtexInput({
       rawInput: parsed.data.text,
-      sourceType: "text"
+      sourceType: "text",
+      mode: body.mode === "new_project" ? "new_project" : "existing_project",
+      projectId: typeof body.projectId === "string" ? body.projectId : null,
+      projectName: typeof body.projectName === "string" ? body.projectName : null
     });
 
     return NextResponse.json(result);

@@ -9,10 +9,26 @@ export const users = sqliteTable("users", {
   updatedAt: text("updated_at").notNull()
 });
 
+export const projects = sqliteTable(
+  "projects",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (table) => ({
+    userCreatedIdx: index("projects_user_created_idx").on(table.userId, table.createdAt)
+  })
+);
+
 export const papers = sqliteTable(
   "papers",
   {
     id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
     bibtexKey: text("bibtex_key"),
     rawBibtex: text("raw_bibtex").notNull(),
     title: text("title").notNull(),
@@ -29,6 +45,7 @@ export const papers = sqliteTable(
     updatedAt: text("updated_at").notNull()
   },
   (table) => ({
+    projectIdx: index("papers_project_idx").on(table.projectId),
     statusIdx: index("papers_status_idx").on(table.status),
     yearIdx: index("papers_year_idx").on(table.year)
   })
@@ -36,6 +53,7 @@ export const papers = sqliteTable(
 
 export const importBatches = sqliteTable("import_batches", {
   id: text("id").primaryKey(),
+  projectId: text("project_id").notNull(),
   userId: text("user_id").notNull(),
   sourceType: text("source_type").notNull(),
   filename: text("filename"),

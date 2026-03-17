@@ -1,43 +1,109 @@
 import { and, desc, eq, like, or, sql } from "drizzle-orm";
 import { getDb } from "./client";
-import { decisionLogs, importBatches, importDuplicateLogs, papers, users, type PaperStatus } from "./schema";
+import {
+  decisionLogs,
+  importBatches,
+  importDuplicateLogs,
+  papers,
+  projects,
+  users,
+  type PaperStatus
+} from "./schema";
 import { calculatePercentages } from "@/lib/screening/stats";
 
 export function normalizeTitle(title: string) {
   return title.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
 }
 
-export async function findDuplicatePaper(doi: string | null, normalizedTitle: string) {
+export async function getProjects() {
+  const db = getDb();
+  return db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      description: projects.description,
+      createdAt: projects.createdAt,
+      paperCount: sql<number>`(
+        select count(*) from papers p where p.project_id = ${projects.id}
+      )`,
+      pendingCount: sql<number>`(
+        select count(*) from papers p where p.project_id = ${projects.id} and p.status = 'pending'
+      )`,
+      includedCount: sql<number>`(
+        select count(*) from papers p where p.project_id = ${projects.id} and p.status = 'included'
+      )`,
+      excludedCount: sql<number>`(
+        select count(*) from papers p where p.project_id = ${projects.id} and p.status = 'excluded'
+      )`,
+      uncertainCount: sql<number>`(
+        select count(*) from papers p where p.project_id = ${projects.id} and p.status = 'uncertain'
+      )`
+    })
+    .from(projects)
+    .orderBy(desc(projects.updatedAt), desc(projects.createdAt));
+}
+
+export async function getProjectById(projectId: string) {
+  const db = getDb();
+  const [project] = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      description: projects.description,
+      createdAt: projects.createdAt,
+      updatedAt: projects.updatedAt
+    })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+
+  return project ?? null;
+}
+
+export async function findDuplicatePaper(projectId: string, doi: string | null, normalizedTitle: string) {
   const db = getDb();
   if (doi) {
     const [byDoi] = await db
-      .select({ id: papers.id, title: papers.title, firstAuthor: papers.firstAuthor, year: papers.year, doi: papers.doi, status: papers.status })
+      .select({
+        id: papers.id,
+        title: papers.title,
+        firstAuthor: papers.firstAuthor,
+        year: papers.year,
+        doi: papers.doi,
+        status: papers.status
+      })
       .from(papers)
-      .where(eq(papers.doi, doi))
+      .where(and(eq(papers.projectId, projectId), eq(papers.doi, doi)))
       .limit(1);
     if (byDoi) return { paper: byDoi, matchReason: "doi" as const };
   }
+
   const all = await db
-    .select({ id: papers.id, title: papers.title, firstAuthor: papers.firstAuthor, year: papers.year, doi: papers.doi, status: papers.status })
-    .from(papers);
-  const match = all.find((p) => normalizeTitle(p.title) === normalizedTitle);
+    .select({
+      id: papers.id,
+      title: papers.title,
+      firstAuthor: papers.firstAuthor,
+      year: papers.year,
+      doi: papers.doi,
+      status: papers.status
+    })
+    .from(papers)
+    .where(eq(papers.projectId, projectId));
+
+  const match = all.find((paper) => normalizeTitle(paper.title) === normalizedTitle);
   if (match) return { paper: match, matchReason: "title" as const };
   return null;
 }
 
-export async function listPapers(status: "all" | "processed" | PaperStatus, query: string) {
+export async function listPapers(status: "all" | "processed" | PaperStatus, query: string, projectId: string) {
   const db = getDb();
   const search = query.trim();
-  const conditions = [];
+  const conditions = [eq(papers.projectId, projectId)];
   const latestDecisionAt = sql<string>`coalesce(${decisionLogs.createdAt}, ${papers.updatedAt})`;
 
   if (status === "processed") {
     conditions.push(
-      or(
-        eq(papers.status, "included"),
-        eq(papers.status, "excluded"),
-        eq(papers.status, "uncertain")
-      )
+      or(eq(papers.status, "included"), eq(papers.status, "excluded"), eq(papers.status, "uncertain"))!
     );
   } else if (status !== "all") {
     conditions.push(eq(papers.status, status));
@@ -51,11 +117,10 @@ export async function listPapers(status: "all" | "processed" | PaperStatus, quer
         like(papers.authorsText, pattern),
         like(papers.venue, pattern),
         like(papers.abstract, pattern)
-      )
+      )!
     );
   }
 
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
   return db
     .select({
       id: papers.id,
@@ -67,7 +132,7 @@ export async function listPapers(status: "all" | "processed" | PaperStatus, quer
     })
     .from(papers)
     .leftJoin(decisionLogs, eq(papers.latestDecisionId, decisionLogs.id))
-    .where(whereClause)
+    .where(and(...conditions))
     .orderBy(
       status === "processed"
         ? desc(latestDecisionAt)
@@ -76,12 +141,17 @@ export async function listPapers(status: "all" | "processed" | PaperStatus, quer
     );
 }
 
-export async function getPaperById(id: string) {
+export async function getPaperById(id: string, projectId?: string) {
   const db = getDb();
+  const conditions = [eq(papers.id, id)];
+  if (projectId) {
+    conditions.push(eq(papers.projectId, projectId));
+  }
 
   const [paper] = await db
     .select({
       id: papers.id,
+      projectId: papers.projectId,
       title: papers.title,
       authorsText: papers.authorsText,
       firstAuthor: papers.firstAuthor,
@@ -97,13 +167,13 @@ export async function getPaperById(id: string) {
     })
     .from(papers)
     .leftJoin(decisionLogs, eq(papers.latestDecisionId, decisionLogs.id))
-    .where(eq(papers.id, id))
+    .where(and(...conditions))
     .limit(1);
 
   return paper ?? null;
 }
 
-export async function getDecisionLogs(limit = 100) {
+export async function getDecisionLogs(projectId: string, limit = 100) {
   const db = getDb();
   return db
     .select({
@@ -122,11 +192,12 @@ export async function getDecisionLogs(limit = 100) {
     .from(decisionLogs)
     .innerJoin(papers, eq(decisionLogs.paperId, papers.id))
     .innerJoin(users, eq(decisionLogs.userId, users.id))
+    .where(eq(papers.projectId, projectId))
     .orderBy(desc(decisionLogs.createdAt))
     .limit(limit);
 }
 
-export async function getStats() {
+export async function getStats(projectId: string) {
   const db = getDb();
   const [counts] = await db
     .select({
@@ -136,7 +207,8 @@ export async function getStats() {
       pending: sql<number>`sum(case when ${papers.status} = 'pending' then 1 else 0 end)`,
       uncertain: sql<number>`sum(case when ${papers.status} = 'uncertain' then 1 else 0 end)`
     })
-    .from(papers);
+    .from(papers)
+    .where(eq(papers.projectId, projectId));
 
   const total = counts?.total ?? 0;
   const included = counts?.included ?? 0;
@@ -154,12 +226,12 @@ export async function getStats() {
   };
 }
 
-export async function getNextPendingPaperId(currentPaperId?: string) {
+export async function getNextPendingPaperId(projectId: string, currentPaperId?: string) {
   const db = getDb();
   const items = await db
     .select({ id: papers.id })
     .from(papers)
-    .where(eq(papers.status, "pending"))
+    .where(and(eq(papers.projectId, projectId), eq(papers.status, "pending")))
     .orderBy(desc(papers.updatedAt));
 
   if (items.length === 0) {
@@ -174,18 +246,26 @@ export async function getNextPendingPaperId(currentPaperId?: string) {
   return nextItem?.id ?? items[0]?.id ?? null;
 }
 
-export async function getLatestActiveDecision(paperId: string) {
+export async function getLatestActiveDecision(paperId: string, projectId?: string) {
   const db = getDb();
-  const [decision] = await db
-    .select()
-    .from(decisionLogs)
-    .where(and(eq(decisionLogs.paperId, paperId), eq(decisionLogs.kind, "decision"), eq(decisionLogs.isActive, true)))
-    .orderBy(desc(decisionLogs.createdAt))
-    .limit(1);
+  const conditions = [
+    eq(decisionLogs.paperId, paperId),
+    eq(decisionLogs.kind, "decision"),
+    eq(decisionLogs.isActive, true)
+  ];
+
+  const query = db.select().from(decisionLogs);
+
+  if (projectId) {
+    query.innerJoin(papers, eq(decisionLogs.paperId, papers.id));
+    conditions.push(eq(papers.projectId, projectId));
+  }
+
+  const [decision] = await query.where(and(...conditions)).orderBy(desc(decisionLogs.createdAt)).limit(1);
   return decision ?? null;
 }
 
-export async function getCurrentDecisionSnapshot() {
+export async function getCurrentDecisionSnapshot(projectId: string) {
   const db = getDb();
   return db
     .select({
@@ -200,23 +280,25 @@ export async function getCurrentDecisionSnapshot() {
     })
     .from(papers)
     .leftJoin(decisionLogs, eq(papers.latestDecisionId, decisionLogs.id))
+    .where(eq(papers.projectId, projectId))
     .orderBy(desc(papers.updatedAt));
 }
 
-export async function getIncludedBibEntries() {
+export async function getIncludedBibEntries(projectId: string) {
   const db = getDb();
   return db
     .select({ rawBibtex: papers.rawBibtex })
     .from(papers)
-    .where(eq(papers.status, "included"))
+    .where(and(eq(papers.projectId, projectId), eq(papers.status, "included")))
     .orderBy(desc(papers.updatedAt));
 }
 
-export async function getImportBatches(limit = 50) {
+export async function getImportBatches(projectId: string, limit = 50) {
   const db = getDb();
   return db
     .select({
       id: importBatches.id,
+      projectId: importBatches.projectId,
       sourceType: importBatches.sourceType,
       filename: importBatches.filename,
       rawCount: importBatches.rawCount,
@@ -227,13 +309,15 @@ export async function getImportBatches(limit = 50) {
       createdAt: importBatches.createdAt
     })
     .from(importBatches)
+    .where(eq(importBatches.projectId, projectId))
     .orderBy(desc(importBatches.createdAt))
     .limit(limit);
 }
 
-export async function getImportDuplicateLogsForBatch(batchId: string) {
+export async function getImportDuplicateLogsForBatch(batchId: string, projectId?: string) {
   const db = getDb();
-  return db
+  const conditions = [eq(importDuplicateLogs.batchId, batchId)];
+  const query = db
     .select({
       id: importDuplicateLogs.id,
       newTitle: importDuplicateLogs.newTitle,
@@ -245,5 +329,11 @@ export async function getImportDuplicateLogsForBatch(batchId: string) {
     })
     .from(importDuplicateLogs)
     .leftJoin(papers, eq(importDuplicateLogs.existingPaperId, papers.id))
-    .where(eq(importDuplicateLogs.batchId, batchId));
+    .innerJoin(importBatches, eq(importDuplicateLogs.batchId, importBatches.id));
+
+  if (projectId) {
+    conditions.push(eq(importBatches.projectId, projectId));
+  }
+
+  return query.where(and(...conditions));
 }

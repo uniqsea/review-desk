@@ -4,6 +4,9 @@ import type { NormalizedPaperInput } from "@/lib/bibtex/normalize";
 interface CacheEntry {
   preview: {
     batchToken: string;
+    mode: "new_project" | "existing_project";
+    projectId?: string;
+    projectName?: string;
     toImportCount: number;
     duplicates: Array<{
       entryIndex: number;

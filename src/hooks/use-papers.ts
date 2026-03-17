@@ -13,8 +13,8 @@ export interface PaperListItemData {
   status: "pending" | "included" | "excluded" | "uncertain";
 }
 
-async function fetchPapers(status: PaperListStatus, q: string) {
-  const params = new URLSearchParams({ status, q });
+async function fetchPapers(projectId: string, status: PaperListStatus, q: string) {
+  const params = new URLSearchParams({ projectId, status, q });
   const response = await fetch(`/api/papers?${params.toString()}`);
   if (!response.ok) {
     throw new Error("Failed to fetch papers");
@@ -22,9 +22,10 @@ async function fetchPapers(status: PaperListStatus, q: string) {
   return (await response.json()) as { papers: PaperListItemData[] };
 }
 
-export function usePapers(status: PaperListStatus, q: string) {
+export function usePapers(projectId: string | null, status: PaperListStatus, q: string) {
   return useQuery({
-    queryKey: ["papers", status, q],
-    queryFn: () => fetchPapers(status, q)
+    queryKey: ["papers", projectId, status, q],
+    queryFn: () => fetchPapers(projectId as string, status, q),
+    enabled: Boolean(projectId)
   });
 }

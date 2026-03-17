@@ -2,10 +2,13 @@
 
 import { useState } from "react";
 import type { DuplicateEntry, ImportPreview } from "@/lib/db/mutations";
+import type { ProjectSummary } from "@/hooks/use-projects";
 
 type Stage = "input" | "review" | "done";
+type ImportMode = "new_project" | "existing_project";
 
 interface CommitResult {
+  projectId: string;
   imported: number;
   skipped: number;
   forceImported: number;
@@ -73,13 +76,20 @@ function DuplicateRow({
 export function ImportDialog({
   open,
   onClose,
+  currentProjectId,
+  projects,
   onImported
 }: {
   open: boolean;
   onClose: () => void;
-  onImported: () => void;
+  currentProjectId: string | null;
+  projects: ProjectSummary[];
+  onImported: (projectId: string) => void;
 }) {
   const [stage, setStage] = useState<Stage>("input");
+  const [mode, setMode] = useState<ImportMode>("existing_project");
+  const [targetProjectId, setTargetProjectId] = useState<string>("");
+  const [projectName, setProjectName] = useState("");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,8 +100,13 @@ export function ImportDialog({
 
   if (!open) return null;
 
+  const selectedProjectId = targetProjectId || currentProjectId || projects[0]?.id || "";
+
   const reset = () => {
     setStage("input");
+    setMode("existing_project");
+    setTargetProjectId(currentProjectId || projects[0]?.id || "");
+    setProjectName("");
     setText("");
     setFile(null);
     setError(null);
@@ -105,22 +120,37 @@ export function ImportDialog({
     onClose();
   };
 
+  const targetIsValid =
+    mode === "new_project" ? projectName.trim().length > 0 : selectedProjectId.trim().length > 0;
+
   const runPreview = async (body: FormData | { text: string }) => {
     setSubmitting(true);
     setError(null);
     try {
       let response: Response;
       if (body instanceof FormData) {
+        body.append("mode", mode);
+        if (mode === "new_project") {
+          body.append("projectName", projectName.trim());
+        } else {
+          body.append("projectId", selectedProjectId);
+        }
         response = await fetch("/api/import/bibtex/preview", { method: "POST", body });
       } else {
         response = await fetch("/api/import/bibtex/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
+          body: JSON.stringify({
+            ...body,
+            mode,
+            projectId: mode === "existing_project" ? selectedProjectId : null,
+            projectName: mode === "new_project" ? projectName.trim() : null
+          })
         });
       }
-      if (!response.ok) throw new Error("Preview failed");
-      const data: ImportPreview = await response.json();
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error ?? "Preview failed");
+      const data = json as ImportPreview;
       setPreview(data);
 
       // If no duplicates, commit immediately
@@ -145,11 +175,12 @@ export function ImportDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ batchToken, forceEntryIndices })
       });
-      if (!response.ok) throw new Error("Import failed");
-      const data: CommitResult = await response.json();
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error ?? "Import failed");
+      const data = json as CommitResult;
       setResult(data);
       setStage("done");
-      onImported();
+      onImported(data.projectId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Import failed");
     } finally {
@@ -185,7 +216,7 @@ export function ImportDialog({
           <div>
             <h2 className="text-xl font-semibold">Import BibTeX</h2>
             {stage === "input" && (
-              <p className="mt-1 text-sm text-[var(--text-muted)]">Upload a `.bib` file or paste BibTeX text.</p>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">Create a new project or add entries to an existing project.</p>
             )}
             {stage === "review" && preview && (
               <p className="mt-1 text-sm text-[var(--text-muted)]">
@@ -205,7 +236,71 @@ export function ImportDialog({
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {stage === "input" && (
-            <div className="grid gap-5 md:grid-cols-2">
+            <div className="space-y-5">
+              <div className="panel-muted rounded-2xl p-4">
+                <div className="text-sm font-semibold">Import target</div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <label className="rounded-xl border px-4 py-3" style={{ borderWidth: "var(--hairline)", borderColor: mode === "new_project" ? "var(--accent)" : "var(--border)" }}>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="radio"
+                        name="import-mode"
+                        checked={mode === "new_project"}
+                        onChange={() => setMode("new_project")}
+                        className="mt-1 h-4 w-4 accent-[var(--accent)]"
+                      />
+                      <div>
+                        <div className="text-sm font-medium">Create new project</div>
+                        <div className="mt-1 text-xs text-[var(--text-muted)]">Import this BibTeX set as a new project.</div>
+                      </div>
+                    </div>
+                  </label>
+                  <label className="rounded-xl border px-4 py-3" style={{ borderWidth: "var(--hairline)", borderColor: mode === "existing_project" ? "var(--accent)" : "var(--border)" }}>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="radio"
+                        name="import-mode"
+                        checked={mode === "existing_project"}
+                        onChange={() => setMode("existing_project")}
+                        className="mt-1 h-4 w-4 accent-[var(--accent)]"
+                      />
+                      <div>
+                        <div className="text-sm font-medium">Add to existing project</div>
+                        <div className="mt-1 text-xs text-[var(--text-muted)]">Append entries to the selected project.</div>
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {mode === "new_project" ? (
+                  <div className="mt-4">
+                    <input
+                      value={projectName}
+                      onChange={(event) => setProjectName(event.target.value)}
+                      placeholder="Project name"
+                      className="w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none"
+                      style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-4">
+                    <select
+                      value={selectedProjectId}
+                      onChange={(event) => setTargetProjectId(event.target.value)}
+                      className="w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm outline-none"
+                      style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+                    >
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
               <div className="panel-muted rounded-2xl p-4">
                 <div className="text-sm font-semibold">Upload file</div>
                 <input
@@ -222,7 +317,7 @@ export function ImportDialog({
                     fd.append("file", file);
                     runPreview(fd);
                   }}
-                  disabled={!file || submitting}
+                  disabled={!file || submitting || !targetIsValid}
                   className="mt-4 rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
                   style={{ background: "var(--accent)" }}
                 >
@@ -242,13 +337,14 @@ export function ImportDialog({
                 <button
                   type="button"
                   onClick={() => runPreview({ text })}
-                  disabled={!text.trim() || submitting}
+                  disabled={!text.trim() || submitting || !targetIsValid}
                   className="mt-4 rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
                   style={{ background: "var(--accent)" }}
                 >
                   {submitting ? "Analyzing…" : "Preview Import"}
                 </button>
               </div>
+            </div>
             </div>
           )}
 
@@ -285,7 +381,7 @@ export function ImportDialog({
             <div className="space-y-3 text-sm">
               <div className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: "color-mix(in srgb, var(--included) 10%, transparent)" }}>
                 <span className="text-base">✓</span>
-                <span><span className="font-semibold">{result.imported}</span> papers imported</span>
+                <span><span className="font-semibold">{result.imported}</span> papers imported into project</span>
               </div>
               {result.skipped > 0 && (
                 <div className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: "color-mix(in srgb, var(--pending) 10%, transparent)" }}>

@@ -3,14 +3,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ImportDialog } from "./import-dialog";
-import { LogDrawer } from "./log-drawer";
 import { PaperDetail } from "./paper-detail";
 import { PaperList } from "./paper-list";
 import { ProcessedList } from "./processed-list";
-import { useDecisionLog } from "@/hooks/use-decision-log";
-import { useImportLog } from "@/hooks/use-import-log";
 import { usePaperDetail } from "@/hooks/use-paper-detail";
 import { usePapers } from "@/hooks/use-papers";
+import { useProjects } from "@/hooks/use-projects";
 import { useStats } from "@/hooks/use-stats";
 
 async function postJson(url: string, body?: unknown) {
@@ -38,29 +36,53 @@ export function WorkbenchPage() {
   const queryClient = useQueryClient();
 
   const [activeSide, setActiveSide] = useState<ActiveSide>("pending");
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [showImport, setShowImport] = useState(false);
-  const [showLog, setShowLog] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const projectsQuery = useProjects();
+  const projects = projectsQuery.data?.projects ?? [];
 
   // Left: pending only
   const [pendingSearch, setPendingSearch] = useState("");
-  const pendingQuery = usePapers("pending", pendingSearch);
+  const pendingQuery = usePapers(currentProjectId, "pending", pendingSearch);
   const pendingPapers = pendingQuery.data?.papers ?? [];
 
   // Right: processed
   const [processedFilter, setProcessedFilter] = useState<"all" | "included" | "excluded" | "uncertain">("all");
   const [processedSearch, setProcessedSearch] = useState("");
   const processedStatus = processedFilter === "all" ? "processed" : processedFilter;
-  const processedQuery = usePapers(processedStatus, processedSearch);
+  const processedQuery = usePapers(currentProjectId, processedStatus, processedSearch);
   const processedPapers = processedQuery.data?.papers ?? [];
 
-  const statsQuery = useStats();
+  const statsQuery = useStats(currentProjectId);
   const stats = statsQuery.data?.stats;
-  const detailQuery = usePaperDetail(selectedPaperId);
-  const decisionLogQuery = useDecisionLog();
-  const importLogQuery = useImportLog();
+  const detailQuery = usePaperDetail(selectedPaperId, currentProjectId);
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    const storedProjectId = typeof window !== "undefined" ? window.localStorage.getItem("currentProjectId") : null;
+    const fallbackProjectId = storedProjectId && projects.some((project) => project.id === storedProjectId)
+      ? storedProjectId
+      : projects[0]?.id ?? null;
+
+    setCurrentProjectId((prev) => prev ?? fallbackProjectId);
+  }, [projects]);
+
+  useEffect(() => {
+    if (!currentProjectId || typeof window === "undefined") return;
+    window.localStorage.setItem("currentProjectId", currentProjectId);
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    setSelectedPaperId(null);
+    setReason("");
+    setPendingSearch("");
+    setProcessedSearch("");
+    setActiveSide("pending");
+  }, [currentProjectId]);
 
   // Auto-select first pending paper
   useEffect(() => {
@@ -86,13 +108,14 @@ export function WorkbenchPage() {
       queryClient.invalidateQueries({ queryKey: ["stats"] }),
       queryClient.invalidateQueries({ queryKey: ["decisions"] }),
       queryClient.invalidateQueries({ queryKey: ["paper"] }),
-      queryClient.invalidateQueries({ queryKey: ["importBatches"] })
+      queryClient.invalidateQueries({ queryKey: ["importBatches"] }),
+      queryClient.invalidateQueries({ queryKey: ["projects"] })
     ]);
   };
 
   const decisionMutation = useMutation({
     mutationFn: async ({ decision, reasonText }: { decision: "included" | "excluded" | "uncertain"; reasonText: string }) =>
-      postJson(`/api/papers/${selectedPaperId}/decision`, { decision, reason: reasonText }),
+      postJson(`/api/papers/${selectedPaperId}/decision`, { decision, reason: reasonText, projectId: currentProjectId }),
     onSuccess: async (data) => {
       setReason("");
       setError(null);
@@ -105,7 +128,7 @@ export function WorkbenchPage() {
   });
 
   const undoMutation = useMutation({
-    mutationFn: async () => postJson(`/api/papers/${selectedPaperId}/undo`),
+    mutationFn: async () => postJson(`/api/papers/${selectedPaperId}/undo`, { projectId: currentProjectId }),
     onSuccess: async () => { setError(null); await refreshAll(); },
     onError: (e) => setError(e instanceof Error ? e.message : "Failed to undo")
   });
@@ -127,6 +150,22 @@ export function WorkbenchPage() {
                 <div className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">PRISMA Screening</div>
                 <h1 className="mt-0.5 text-lg font-semibold tracking-tight">Title / Abstract Screening</h1>
               </div>
+              <div className="hidden xl:block h-7 w-px bg-[var(--border)]" />
+              <div className="min-w-[220px]">
+                <div className="mb-1 text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">Current Project</div>
+                <select
+                  value={currentProjectId ?? ""}
+                  onChange={(event) => setCurrentProjectId(event.target.value || null)}
+                  className="w-full rounded-xl border bg-transparent px-3 py-2 text-sm outline-none"
+                  style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {stats && (
                 <>
                   <div className="hidden xl:block h-7 w-px bg-[var(--border)]" />
@@ -145,15 +184,26 @@ export function WorkbenchPage() {
               <button
                 type="button"
                 onClick={() => setShowImport(true)}
+                disabled={!currentProjectId && projects.length > 0}
                 className="rounded-2xl px-4 py-2 text-sm font-semibold text-white"
                 style={{ background: "var(--accent)" }}
               >
                 Import BibTeX
               </button>
-              <button type="button" onClick={() => window.open("/api/export/csv", "_blank")} className="pill px-4 py-2 text-sm font-medium">
+              <button
+                type="button"
+                onClick={() => currentProjectId && window.open(`/api/export/csv?${new URLSearchParams({ projectId: currentProjectId }).toString()}`, "_blank")}
+                className="pill px-4 py-2 text-sm font-medium"
+                disabled={!currentProjectId}
+              >
                 Export CSV
               </button>
-              <button type="button" onClick={() => window.open("/api/export/included-bib", "_blank")} className="pill px-4 py-2 text-sm font-medium">
+              <button
+                type="button"
+                onClick={() => currentProjectId && window.open(`/api/export/included-bib?${new URLSearchParams({ projectId: currentProjectId }).toString()}`, "_blank")}
+                className="pill px-4 py-2 text-sm font-medium"
+                disabled={!currentProjectId}
+              >
                 Export .bib
               </button>
             </div>
@@ -204,18 +254,14 @@ export function WorkbenchPage() {
         </section>
       </div>
 
-      <LogDrawer
-        open={showLog}
-        onClose={() => setShowLog(false)}
-        decisions={decisionLogQuery.data?.decisions ?? []}
-        importBatches={importLogQuery.data?.batches ?? []}
-      />
-
       <ImportDialog
         open={showImport}
         onClose={() => setShowImport(false)}
-        onImported={async () => {
+        currentProjectId={currentProjectId}
+        projects={projects}
+        onImported={async (projectId) => {
           await refreshAll();
+          setCurrentProjectId(projectId);
           setSelectedPaperId(null);
           setActiveSide("pending");
         }}

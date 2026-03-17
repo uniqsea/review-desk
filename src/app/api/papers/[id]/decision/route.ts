@@ -20,7 +20,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const result = await createDecision({
       paperId: id,
       decision: parsed.data.decision,
-      reason: parsed.data.reason
+      reason: parsed.data.reason,
+      projectId: typeof body.projectId === "string" ? body.projectId : undefined
     });
 
     return NextResponse.json(result);

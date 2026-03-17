@@ -25,7 +25,6 @@ pnpm-debug.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # coverage
 coverage/
@@ -34,14 +33,15 @@ coverage/
 .DS_Store
 
 # local app data
-data/*.db
-data/*.db-shm
-data/*.db-wal
 data/activity.log
+data/imports/
+data/exports/
+data/*.db
+data/*.db-*
+*.sqlite
+*.sqlite-*
 
 # editor
 .idea/
 .vscode/
-.claude/
-
 .claude/

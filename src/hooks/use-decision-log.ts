@@ -17,16 +17,21 @@ export interface DecisionLogItem {
 }
 
 async function fetchDecisionLog() {
-  const response = await fetch("/api/decisions");
+  throw new Error("projectId is required");
+}
+
+async function fetchDecisionLogForProject(projectId: string) {
+  const response = await fetch(`/api/decisions?${new URLSearchParams({ projectId }).toString()}`);
   if (!response.ok) {
     throw new Error("Failed to fetch decision log");
   }
   return (await response.json()) as { decisions: DecisionLogItem[] };
 }
 
-export function useDecisionLog() {
+export function useDecisionLog(projectId: string | null) {
   return useQuery({
-    queryKey: ["decisions"],
-    queryFn: fetchDecisionLog
+    queryKey: ["decisions", projectId],
+    queryFn: () => fetchDecisionLogForProject(projectId as string),
+    enabled: Boolean(projectId)
   });
 }

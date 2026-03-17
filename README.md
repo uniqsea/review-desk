@@ -40,6 +40,8 @@ npm run db:init
 
 ### 2026-03-17
 
+- Changed duplicate detection to run within the target project instead of globally
 - Added `.gitignore`
 - Added initial `README.md`
 - Clarified README positioning for PRISMA screening workflow
+- Added project-based import workflow

@@ -5,8 +5,8 @@ import { parseBibtex } from "@/lib/bibtex/parse";
 import { normalizeBibtexEntry, type NormalizedPaperInput } from "@/lib/bibtex/normalize";
 import { nowIso } from "@/lib/utils/time";
 import { getDataDirectories, getDb, getDefaultUserId, getSqlite } from "./client";
-import { decisionLogs, importBatches, importDuplicateLogs, paperImports, papers, type PaperStatus } from "./schema";
-import { findDuplicatePaper, getLatestActiveDecision, getNextPendingPaperId, getPaperById, getStats, normalizeTitle } from "./queries";
+import { decisionLogs, importBatches, importDuplicateLogs, paperImports, papers, projects, type PaperStatus } from "./schema";
+import { findDuplicatePaper, getLatestActiveDecision, getNextPendingPaperId, getPaperById, getProjectById, getStats, normalizeTitle } from "./queries";
 import { previewCache } from "./preview-cache";
 import { logDecision, logImport, logUndo } from "@/lib/activity-log";
 
@@ -26,6 +26,9 @@ export interface DuplicateEntry {
 
 export interface ImportPreview {
   batchToken: string;
+  mode: "new_project" | "existing_project";
+  projectId?: string;
+  projectName?: string;
   toImportCount: number;
   duplicates: DuplicateEntry[];
   failures: Array<{ raw: string; error: string }>;
@@ -35,16 +38,78 @@ export interface ImportPreview {
   rawCount: number;
 }
 
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function createProject({
+  name,
+  description
+}: {
+  name: string;
+  description?: string | null;
+}) {
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error("Project name is required");
+  }
+
+  const db = getDb();
+  const userId = getDefaultUserId();
+  const createdAt = nowIso();
+  const projectId = crypto.randomUUID();
+
+  db.insert(projects).values({
+    id: projectId,
+    userId,
+    name: trimmedName,
+    description: description?.trim() || null,
+    createdAt,
+    updatedAt: createdAt
+  }).run();
+
+  return {
+    id: projectId,
+    name: trimmedName,
+    description: description?.trim() || null,
+    createdAt,
+    updatedAt: createdAt
+  } satisfies ProjectSummary;
+}
 
 export async function previewImport({
   rawInput,
   sourceType,
-  filename
+  filename,
+  mode,
+  projectId,
+  projectName
 }: {
   rawInput: string;
   sourceType: "file" | "text";
   filename?: string | null;
+  mode: "new_project" | "existing_project";
+  projectId?: string | null;
+  projectName?: string | null;
 }): Promise<ImportPreview> {
+  if (mode === "existing_project") {
+    if (!projectId) {
+      throw new Error("Project is required");
+    }
+    const project = await getProjectById(projectId);
+    if (!project) {
+      throw new Error("Project not found");
+    }
+  }
+
+  if (mode === "new_project" && !projectName?.trim()) {
+    throw new Error("Project name is required");
+  }
+
   const parsed = parseBibtex(rawInput);
   const failures = [...parsed.failures];
   const validEntries: NormalizedPaperInput[] = [];
@@ -61,22 +126,27 @@ export async function previewImport({
   const duplicates: DuplicateEntry[] = [];
   const toImportEntries: NormalizedPaperInput[] = [];
 
-  for (let i = 0; i < validEntries.length; i++) {
+  for (let i = 0; i < validEntries.length; i += 1) {
     const entry = validEntries[i];
-    const doi = entry.doi || null;
-    const normTitle = normalizeTitle(entry.title);
-    const dup = await findDuplicatePaper(doi, normTitle);
-    if (dup) {
-      duplicates.push({ entryIndex: i, entry, existingPaper: dup.paper, matchReason: dup.matchReason });
-    } else {
-      toImportEntries.push(entry);
+    if (mode === "existing_project" && projectId) {
+      const doi = entry.doi || null;
+      const normTitle = normalizeTitle(entry.title);
+      const dup = await findDuplicatePaper(projectId, doi, normTitle);
+      if (dup) {
+        duplicates.push({ entryIndex: i, entry, existingPaper: dup.paper, matchReason: dup.matchReason });
+        continue;
+      }
     }
+    toImportEntries.push(entry);
   }
 
   const batchToken = crypto.randomUUID();
   previewCache.set(batchToken, {
     preview: {
       batchToken,
+      mode,
+      projectId: projectId ?? undefined,
+      projectName: projectName?.trim() || undefined,
       toImportCount: toImportEntries.length,
       duplicates,
       failures,
@@ -116,6 +186,7 @@ export async function commitImport({
   const userId = getDefaultUserId();
   const batchId = crypto.randomUUID();
   const createdAt = nowIso();
+  let projectId = preview.projectId ?? null;
 
   const forceSet = new Set(forceEntryIndices);
   const duplicateIndexSet = new Set(preview.duplicates.map((d) => d.entryIndex));
@@ -128,8 +199,25 @@ export async function commitImport({
   const insertedPaperIds = new Map<number, string>(); // entryIndex -> paperId
 
   sqlite.transaction(() => {
+    if (preview.mode === "new_project") {
+      projectId = crypto.randomUUID();
+      db.insert(projects).values({
+        id: projectId,
+        userId,
+        name: preview.projectName ?? "Untitled Project",
+        description: null,
+        createdAt,
+        updatedAt: createdAt
+      }).run();
+    }
+
+    if (!projectId) {
+      throw new Error("Project not found");
+    }
+
     db.insert(importBatches).values({
       id: batchId,
+      projectId,
       userId,
       sourceType: preview.sourceType,
       filename: preview.filename ?? null,
@@ -149,6 +237,7 @@ export async function commitImport({
       insertedPaperIds.set(i, paperId);
       db.insert(papers).values({
         id: paperId,
+        projectId,
         bibtexKey: entry.bibtexKey,
         rawBibtex: entry.rawBibtex,
         title: entry.title,
@@ -212,6 +301,7 @@ export async function commitImport({
   logImport({ label, imported: importedCount, skipped: skippedCount, failed: failedCount, duplicates: dupCount });
 
   return {
+    projectId,
     batchId,
     imported: importedCount,
     skipped: skippedCount,
@@ -223,16 +313,25 @@ export async function commitImport({
 export async function importBibtexInput({
   rawInput,
   sourceType,
-  filename
+  filename,
+  mode,
+  projectId,
+  projectName
 }: {
   rawInput: string;
   sourceType: "file" | "text";
   filename?: string | null;
+  mode: "new_project" | "existing_project";
+  projectId?: string | null;
+  projectName?: string | null;
 }) {
   const preview = await previewImport({
     rawInput,
     sourceType,
-    filename
+    filename,
+    mode,
+    projectId,
+    projectName
   });
 
   return commitImport({
@@ -244,17 +343,19 @@ export async function importBibtexInput({
 export async function createDecision({
   paperId,
   decision,
-  reason
+  reason,
+  projectId
 }: {
   paperId: string;
   decision: Extract<PaperStatus, "included" | "excluded" | "uncertain">;
   reason?: string;
+  projectId?: string;
 }) {
   const db = getDb();
   const sqlite = getSqlite();
   const userId = getDefaultUserId();
   const createdAt = nowIso();
-  const paper = await getPaperById(paperId);
+  const paper = await getPaperById(paperId, projectId);
 
   if (!paper) {
     throw new Error("Paper not found");
@@ -290,13 +391,13 @@ export async function createDecision({
 
   return {
     paper: await getPaperById(paperId),
-    nextPendingPaperId: await getNextPendingPaperId(paperId),
-    stats: await getStats()
+    nextPendingPaperId: await getNextPendingPaperId(paper.projectId, paperId),
+    stats: await getStats(paper.projectId)
   };
 }
 
-export async function undoLatestDecisionForPaper(paperId: string) {
-  const decision = await getLatestActiveDecision(paperId);
+export async function undoLatestDecisionForPaper(paperId: string, projectId?: string) {
+  const decision = await getLatestActiveDecision(paperId, projectId);
   if (!decision) {
     throw new Error("No active decision to undo");
   }
@@ -376,6 +477,6 @@ export async function undoDecisionById(decisionId: string) {
 
   return {
     paper: undonePaper,
-    stats: await getStats()
+    stats: undonePaper ? await getStats(undonePaper.projectId) : null
   };
 }

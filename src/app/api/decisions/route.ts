@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { getDecisionLogs } from "@/lib/db/queries";
 
-export async function GET() {
-  const decisions = await getDecisionLogs();
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const projectId = searchParams.get("projectId") ?? "";
+  if (!projectId) {
+    return NextResponse.json({ error: "projectId is required" }, { status: 400 });
+  }
+  const decisions = await getDecisionLogs(projectId);
   return NextResponse.json({ decisions });
 }

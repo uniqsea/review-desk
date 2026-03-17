@@ -8,6 +8,8 @@ const IMPORT_DIR = path.join(DATA_DIR, "imports");
 const EXPORT_DIR = path.join(DATA_DIR, "exports");
 const DB_PATH = path.join(DATA_DIR, "review.db");
 const DEFAULT_USER_ID = "local-reviewer";
+const LEGACY_PROJECT_ID = "legacy-project";
+const LEGACY_PROJECT_NAME = "Legacy";
 
 let database: InstanceType<typeof Database> | null = null;
 
@@ -35,8 +37,18 @@ export function initializeDatabase() {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS papers (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '',
         bibtex_key TEXT,
         raw_bibtex TEXT NOT NULL,
         title TEXT NOT NULL,
@@ -55,6 +67,7 @@ export function initializeDatabase() {
 
       CREATE TABLE IF NOT EXISTS import_batches (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '',
         user_id TEXT NOT NULL,
         source_type TEXT NOT NULL,
         filename TEXT,
@@ -100,6 +113,7 @@ export function initializeDatabase() {
 
       CREATE INDEX IF NOT EXISTS papers_status_idx ON papers(status);
       CREATE INDEX IF NOT EXISTS papers_year_idx ON papers(year);
+      CREATE INDEX IF NOT EXISTS projects_user_created_idx ON projects(user_id, created_at);
       CREATE INDEX IF NOT EXISTS decision_logs_paper_created_idx ON decision_logs(paper_id, created_at);
       CREATE INDEX IF NOT EXISTS decision_logs_user_created_idx ON decision_logs(user_id, created_at);
     `);
@@ -107,6 +121,10 @@ export function initializeDatabase() {
     // Migrations for existing databases
     try { database.exec("ALTER TABLE import_batches ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0"); } catch {}
     try { database.exec("ALTER TABLE import_batches ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0"); } catch {}
+    try { database.exec("ALTER TABLE papers ADD COLUMN project_id TEXT NOT NULL DEFAULT ''"); } catch {}
+    try { database.exec("ALTER TABLE import_batches ADD COLUMN project_id TEXT NOT NULL DEFAULT ''"); } catch {}
+    try { database.exec("CREATE INDEX IF NOT EXISTS papers_project_idx ON papers(project_id)"); } catch {}
+    try { database.exec("CREATE INDEX IF NOT EXISTS projects_user_created_idx ON projects(user_id, created_at)"); } catch {}
 
     const now = new Date().toISOString();
     database
@@ -115,6 +133,20 @@ export function initializeDatabase() {
          VALUES (?, ?, ?, ?, ?, ?)`
       )
       .run(DEFAULT_USER_ID, "Local Reviewer", null, "reviewer", now, now);
+
+    database
+      .prepare(
+        `INSERT OR IGNORE INTO projects (id, user_id, name, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(LEGACY_PROJECT_ID, DEFAULT_USER_ID, LEGACY_PROJECT_NAME, "Migrated pre-project data", now, now);
+
+    database
+      .prepare(`UPDATE papers SET project_id = ? WHERE project_id IS NULL OR project_id = ''`)
+      .run(LEGACY_PROJECT_ID);
+    database
+      .prepare(`UPDATE import_batches SET project_id = ? WHERE project_id IS NULL OR project_id = ''`)
+      .run(LEGACY_PROJECT_ID);
   }
 
   return database;
@@ -131,6 +163,10 @@ export function getSqlite() {
 
 export function getDefaultUserId() {
   return DEFAULT_USER_ID;
+}
+
+export function getLegacyProject() {
+  return { id: LEGACY_PROJECT_ID, name: LEGACY_PROJECT_NAME };
 }
 
 export function getDataDirectories() {

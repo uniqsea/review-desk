@@ -16,16 +16,21 @@ export interface StatsData {
 }
 
 async function fetchStats() {
-  const response = await fetch("/api/stats");
+  throw new Error("projectId is required");
+}
+
+async function fetchStatsForProject(projectId: string) {
+  const response = await fetch(`/api/stats?${new URLSearchParams({ projectId }).toString()}`);
   if (!response.ok) {
     throw new Error("Failed to fetch stats");
   }
   return (await response.json()) as { stats: StatsData };
 }
 
-export function useStats() {
+export function useStats(projectId: string | null) {
   return useQuery({
-    queryKey: ["stats"],
-    queryFn: fetchStats
+    queryKey: ["stats", projectId],
+    queryFn: () => fetchStatsForProject(projectId as string),
+    enabled: Boolean(projectId)
   });
 }

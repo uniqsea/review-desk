@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { undoLatestDecisionForPaper } from "@/lib/db/mutations";
 
-export async function POST(_: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const result = await undoLatestDecisionForPaper(id);
+    const body = await request.json().catch(() => ({}));
+    const result = await undoLatestDecisionForPaper(id, typeof body.projectId === "string" ? body.projectId : undefined);
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to undo decision";
