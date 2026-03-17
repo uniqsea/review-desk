@@ -1,15 +1,16 @@
 # Review Desk
 
-Review Desk is a simple review system for managing paper screening work.
+Review Desk is a simple PRISMA review system for managing paper screening work.
 
-It is built for quickly importing records, reviewing items one by one, marking decisions, and tracking progress in a single workspace.
+It is built for PRISMA-style literature screening: importing records, reviewing studies one by one, recording screening decisions, and tracking progress in a single workspace.
 
 ## What It Does
 
 - Import paper data from BibTeX files
+- Support PRISMA screening workflow for study selection
 - View pending and processed records
 - Mark items as included, excluded, or uncertain
-- Save decision reasons
+- Save screening reasons and decision notes
 - Track review progress and decision history
 - Store local data with SQLite
 
@@ -41,4 +42,4 @@ npm run db:init
 
 - Added `.gitignore`
 - Added initial `README.md`
-- Confirmed project naming direction as `Review Desk`
+- Clarified README positioning for PRISMA screening workflow
