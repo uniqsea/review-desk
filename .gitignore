@@ -42,3 +42,6 @@ data/activity.log
 # editor
 .idea/
 .vscode/
+.claude/
+
+.claude/
