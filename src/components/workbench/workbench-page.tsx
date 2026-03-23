@@ -252,93 +252,123 @@ export function WorkbenchPage({ initialProjectId = null }: { initialProjectId?: 
   return (
     <main className="app-shell h-screen overflow-hidden px-5 py-5 md:px-6 lg:px-8">
       <div className="mx-auto flex h-full min-h-0 max-w-[1800px] flex-col gap-5">
-        <section className="panel px-6 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex min-w-0 items-center gap-5">
-              <div className="min-w-0">
-                <div className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">PRISMA Screening</div>
-                <h1 className="mt-0.5 text-lg font-semibold tracking-tight">Reviewer Workspace</h1>
+        <section className="panel px-5 py-3.5">
+          <div className="flex items-center justify-between gap-4 min-w-0">
+            {/* Left: brand + project selector */}
+            <div className="flex min-w-0 items-center gap-4">
+              <div className="shrink-0">
+                <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">PRISMA Screening</div>
+                <h1 className="text-base font-bold leading-tight tracking-tight">Title & Abstract</h1>
               </div>
-              <div className="hidden h-7 w-px bg-[var(--border)] xl:block" />
-              <div className="min-w-[240px]">
-                <div className="mb-1 text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">Current Project</div>
-                <div className="flex gap-2">
-                  <select
-                    value={currentProjectId ?? ""}
-                    onChange={(event) => {
-                      const nextProjectId = event.target.value || null;
-                      setCurrentProjectId(nextProjectId);
-                    }}
-                    className="w-full rounded-xl border bg-transparent px-3 py-2 text-sm outline-none"
-                    style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+
+              <div className="h-6 w-px shrink-0 bg-[var(--border)]" />
+
+              {/* Project selector */}
+              <div className="group/proj flex min-w-0 items-center gap-1.5">
+                <select
+                  value={currentProjectId ?? ""}
+                  onChange={(event) => {
+                    const nextProjectId = event.target.value || null;
+                    setCurrentProjectId(nextProjectId);
+                  }}
+                  className="rounded-lg border bg-transparent py-1.5 pl-2.5 pr-7 text-sm font-medium outline-none"
+                  style={{ borderWidth: "var(--hairline)", borderColor: "var(--border)" }}
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+                {canManageMembers ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowRenameProject(true)}
+                    title="Rename project"
+                    className="opacity-0 group-hover/proj:opacity-100 transition-opacity rounded-md p-1 text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--panel-muted)]"
                   >
-                    {projects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.name}
-                      </option>
-                    ))}
-                  </select>
-                  {canManageMembers ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowRenameProject(true)}
-                      className="pill px-3 py-2 text-sm font-medium"
-                    >
-                      Rename
-                    </button>
-                  ) : null}
-                </div>
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11.013 2.513a1.75 1.75 0 0 1 2.475 2.474L6.226 12.25l-3 .75.75-3 7.037-7.487Z"/>
+                    </svg>
+                  </button>
+                ) : null}
               </div>
+
+              {/* Stats pills */}
+              {stats ? (
+                <div className="hidden items-center gap-1.5 xl:flex">
+                  <span className="rounded-full bg-[var(--panel-muted)] px-2.5 py-0.5 text-xs text-[var(--text-muted)]">
+                    {stats.total} total
+                  </span>
+                  <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: "rgba(202,138,4,0.1)", color: "var(--pending)" }}>
+                    {stats.pending} pending
+                  </span>
+                  <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: "rgba(22,163,74,0.08)", color: "var(--included)" }}>
+                    {stats.included} included
+                  </span>
+                  <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: "rgba(220,38,38,0.08)", color: "var(--excluded)" }}>
+                    {stats.excluded} excluded
+                  </span>
+                  {stats.uncertain > 0 && (
+                    <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: "rgba(202,138,4,0.1)", color: "var(--pending)" }}>
+                      {stats.uncertain} uncertain
+                    </span>
+                  )}
+                </div>
+              ) : null}
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="text-right">
-                <div className="text-sm font-medium">{currentUser.displayName}</div>
-              </div>
-              <button type="button" onClick={() => setShowMembers(true)} className="pill px-4 py-2 text-sm font-medium">
+            {/* Right: actions + user */}
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button type="button" onClick={() => setShowMembers(true)} className="pill px-3 py-1.5 text-xs font-medium">
                 Members
               </button>
               {currentProjectId ? (
-                <Link href={`/projects/${currentProjectId}/summary`} className="pill px-4 py-2 text-sm font-medium">
+                <Link href={`/projects/${currentProjectId}/summary`} className="pill px-3 py-1.5 text-xs font-medium">
                   Summary
                 </Link>
               ) : null}
-              <button type="button" onClick={() => setShowImport(true)} className="pill px-4 py-2 text-sm font-medium">
-                Import BibTeX
+
+              <div className="mx-1 h-4 w-px bg-[var(--border)]" />
+
+              <button type="button" onClick={() => setShowImport(true)} className="pill px-3 py-1.5 text-xs font-medium">
+                Import
               </button>
               <button
                 type="button"
                 onClick={() => window.open(`/api/export/csv?projectId=${currentProjectId}`, "_blank")}
-                className="pill px-4 py-2 text-sm font-medium"
+                className="pill px-3 py-1.5 text-xs font-medium"
               >
-                Export CSV
+                CSV
               </button>
               <button
                 type="button"
                 onClick={() => window.open(`/api/export/included-bib?projectId=${currentProjectId}`, "_blank")}
-                className="pill px-4 py-2 text-sm font-medium"
+                className="pill px-3 py-1.5 text-xs font-medium"
               >
-                Export .bib
+                .bib
               </button>
+
+              <div className="mx-1 h-4 w-px bg-[var(--border)]" />
+
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                  style={{ background: "var(--accent)" }}
+                >
+                  {currentUser.displayName.charAt(0).toUpperCase()}
+                </div>
+                <span className="hidden text-sm font-medium lg:block">{currentUser.displayName}</span>
+              </div>
               <button
                 type="button"
                 onClick={() => logoutMutation.mutate()}
-                className="pill px-4 py-2 text-sm font-medium"
+                className="pill px-3 py-1.5 text-xs text-[var(--text-muted)] font-medium"
               >
                 Logout
               </button>
             </div>
           </div>
-
-          {stats ? (
-            <div className="mt-4 flex flex-wrap gap-3 text-sm">
-              <span>{stats.total} papers</span>
-              <span className="text-[var(--pending)]">{stats.pending} pending</span>
-              <span className="text-[var(--included)]">{stats.included} included</span>
-              <span className="text-[var(--excluded)]">{stats.excluded} excluded</span>
-              <span className="text-[var(--pending)]">{stats.uncertain} uncertain</span>
-            </div>
-          ) : null}
         </section>
 
         {error ? <div className="text-sm text-[var(--excluded)]">{error}</div> : null}
